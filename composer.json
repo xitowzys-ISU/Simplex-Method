@@ -1,0 +1,12 @@
+{
+    "name": "raidemot/simplex-method.com",
+    "authors": [
+        {
+            "name": "Kalinka George",
+            "email": "xitowzys@gmail.com"
+        }
+    ],
+    "require": {
+        "numphp/numphp": "*"
+    }
+}
