@@ -1,5 +1,7 @@
 <?php
 
+require 'core/Table.php';
+
 class Simplex
 {
 
@@ -26,6 +28,10 @@ class Simplex
 
     protected $mathSymbols = [['<=', 1], ['>=', -1], ['=', 0]];
 
+    protected $table;
+
+    protected $basis = [];
+
     public function __construct(array $targetFunc, array $limitations)
     {
         $this->targetFunc = $targetFunc;
@@ -34,6 +40,11 @@ class Simplex
 
     public function run()
     {
+
+        if(end($this->targetFunc) === 'min')
+            $this->reverseTargetFunc();
+
+
         $this->limitationsCanonical = $this->canonicalForm();
 
         $test = $this->checkingForTheUnitMatrix();
@@ -41,6 +52,35 @@ class Simplex
         if (sizeof($test) > 0)
             $this->addAnArtificialBasis($test);
 
+        $this->createTable();
+
+        $this->table->renderTable();
+
+        $result = [];
+
+        do {
+            $result = $this->decision();
+
+            if ($result['status'] === 'recalculation') {
+                $isImpossible = $this->recalculation($result['delta']);
+
+                if(!($isImpossible)) {
+                    $this->table->renderTable();
+                    $result['status'] === 'impossible';
+                    break;
+                }
+
+                $this->table->renderTable();
+            } else {
+                break;
+            }
+        } while (1);
+
+        if ($result['status'] === 'decided') {
+            echo '<p>Найден оптимальный план</p>';
+            echo '<p>Ответ: ' . $result['answer'] . '</p>';
+        } else
+            echo '<p>Оптимальный план найти невозможно</p>';
 
         // debug($this->limitationsCanonical);
     }
@@ -113,11 +153,14 @@ class Simplex
         for ($i = 0; $i < sizeof($limitationsCanonical); $i++) {
             for ($j = 0; $j < sizeof($limitationsCanonical[$i]); $j++) {
 
-                // TODO: A negative number must be inserted when the sign >= is used
-                if ($this->symbolIndex($limitationsCanonical[$i][$j]) === 1) {
-                    $limitationsCanonical[$i][$j] = '=';
+                if ($this->symbolIndex($limitationsCanonical[$i][$j]) === 1 || $this->symbolIndex($limitationsCanonical[$i][$j]) === -1) {
 
-                    array_splice($limitationsCanonical[$i], $j, 0, array(1));
+                    if ($this->symbolIndex($limitationsCanonical[$i][$j]) === 1)
+                        array_splice($limitationsCanonical[$i], $j, 0, array(1));
+                    else
+                        array_splice($limitationsCanonical[$i], $j, 0, array(-1));
+
+                    $limitationsCanonical[$i][$j + 1] = '=';
 
                     array_splice($this->targetFunc, $j, 0, array(0));
 
@@ -128,7 +171,6 @@ class Simplex
                 }
             }
         }
-
 
         return $limitationsCanonical;
     }
@@ -170,37 +212,14 @@ class Simplex
                     $unitColumn = false;
             }
 
-            if ($unitColumn === true && $numberOfZeros === sizeof($this->limitationsCanonical) - 1)
-
+            if ($unitColumn === true && $numberOfZeros === sizeof($this->limitationsCanonical) - 1) {
+                array_push($this->basis, $i);
                 unset($limitationIndex[$possibleLimitation]);
+            }
         }
 
         return $limitationIndex;
     }
-
-
-    // /**
-    //  * Set a variable to a limitation
-    //  *
-    //  * @return void
-    //  */
-    // protected function setVariable($symbolIndex, $variableValue, $variableValueTargetFunc){
-    //     for ($i = 0; $i < sizeof($this->limitationsCanonical); $i++) {
-    //         for ($j = 0; $j < sizeof($this->limitationsCanonical[$i]); $j++) {
-    //             if ($this->symbolIndex($this->limitationsCanonical[$i][$j]) === $symbolIndex) {
-
-    //                 array_splice($this->limitationsCanonical[$i], $j, 0, array($variableValue));
-
-    //                 array_splice($this->targetFunc, $j, 0, array($variableValueTargetFunc));
-
-    //                 for ($z = 0; $z < sizeof($this->limitationsCanonical); $z++) {
-    //                     if ($z != $i)
-    //                         array_splice($this->limitationsCanonical[$z], $j, 0, array(0));
-    //                 }
-    //             }
-    //         }
-    //     }
-    // }
 
     /**
      * Undocumented function
@@ -217,6 +236,7 @@ class Simplex
                 if ($this->symbolIndex($this->limitationsCanonical[$key - 1][$j]) === 0) {
 
                     array_splice($this->limitationsCanonical[$key - 1], $j, 0, array(1));
+                    array_push($this->basis, $j);
 
                     if (end($this->targetFunc) === 'max') {
                         array_splice($this->targetFunc, $j, 0, array(BIG_NEGATIVE_NUMBER));
@@ -238,12 +258,190 @@ class Simplex
                             array_splice($this->limitationsCanonical[$i], $j, 0, array(0));
                             break;
                         }
-                    } 
+                    }
                 }
             }
-
         }
 
-        debug($this->limitationsCanonical);
+        // debug($this->targetFunc);
+    }
+
+    protected function createTable()
+    {
+        $this->table = new Table($this->targetFunc, $this->limitationsCanonical, $this->basis);
+    }
+
+    protected function decision()
+    {
+
+        // status: recalculation, decided, impossible
+        $result = [
+            "status" => ''
+        ];
+
+        $delta = [];
+        $tmpDelta = 0;
+
+        // Считает дельту
+        for ($i = 0; $i < $this->table->getRowsTable(); $i++) {
+
+            for ($j = 0; $j < $this->table->getCallsTable(); $j++) {
+                $tmpDelta += $this->table->getTargetFuncVariables()[$this->table->getBasis()[$j]] * $this->table->getTable()[$j][$i];
+            }
+
+            $tmpDelta -= $this->table->getTargetFuncVariables()[$i];
+
+            array_push($delta, $tmpDelta);
+
+            $tmpDelta = 0;
+        }
+
+        for ($j = 0; $j < $this->table->getCallsTable(); $j++) {
+            $tmpDelta += $this->table->getTargetFuncVariables()[$this->table->getBasis()[$j]] * $this->table->getB()[$j];
+        }
+
+        array_push($delta, $tmpDelta);
+        $tmpDelta = 0;
+
+        // Проверяем если в дельте есть отрицательное число, то ставим статус пересчет
+        foreach ($delta as $value) {
+            if ($value == end($delta))
+                continue;
+
+            if ($value < 0) {
+                $result['status'] = 'recalculation';
+                $result += ['delta' => $delta];
+
+                return $result;
+            }
+        }
+
+
+        $answer = 0;
+
+        for ($i = 0; $i < $this->table->getCallsTable(); $i++) {
+            $answer += $this->table->getTargetFuncVariables()[$this->table->getBasis()[$i]] * $this->table->getB()[$i];
+        }
+
+        $result['status'] = 'decided';
+        $result['answer'] = $answer;
+        return $result;
+    }
+
+    protected function reverseTargetFunc()
+    {
+        foreach($this->targetFunc as $key => $value)
+        {
+            if(end($this->targetFunc) === $value)
+                $this->targetFunc[$key] = 'max';
+            else
+                $this->targetFunc[$key] = $value * (-1);
+        }
+    }
+
+    /**
+     * Recalculating a simplex table
+     *
+     * @param array $delta
+     * @return void
+     */
+    protected function recalculation(array $delta)
+    {
+
+        $newX = 0;
+        $replacementX = 0;
+
+        $replacementXMatrix = [];
+
+        $table = $this->table->getTable();
+
+        $B = $this->table->getB();
+
+
+        // Ищем в дельте самое большое отрицательное число
+        $min = 1000000;
+        foreach ($delta as $key => $value) {
+
+            if ($value == end($delta)) {
+                continue;
+            } else {
+                if ($value < $min) {
+                    $newX = $key;
+                    $min = $value;
+                }
+            }
+        }
+
+
+        // Ищем иксы для замены
+        for ($i = 0; $i < $this->table->getCallsTable(); $i++) {
+
+            if ($this->table->getTable()[$i][$newX] <= 0) {
+                array_push($replacementXMatrix, '-');
+                continue;
+            } else
+                array_push($replacementXMatrix, $this->table->getB()[$i] / $this->table->getTable()[$i][$newX]);
+        }
+
+        $impossible = true;
+        // Проверяем мозможно ли пересчитать таблицу
+        foreach ($replacementXMatrix as $key => $value) {
+            if ($value !== '-')
+            {
+                $impossible = false;
+                break;
+            }
+        }
+
+        if($impossible)
+            return false;
+
+        $min = 1000000;
+        foreach ($replacementXMatrix as $key => $value) {
+            if ($value === '-')
+                continue;
+
+            if ($value < $min) {
+                $replacementX = $key;
+                $min = $value;
+            }
+        }
+
+        // Перерасчет таблицы
+        $this->basis[$replacementX] = $newX;
+        $tmp = $table[$replacementX][$newX];
+
+        for ($i = 0; $i < $this->table->getRowsTable(); $i++) {
+            $table[$replacementX][$i] /= $tmp;
+        }
+
+        $B[$replacementX] /= $tmp;
+
+        for ($i = 0; $i < $this->table->getCallsTable(); $i++) {
+            $tmpRow = [];
+
+            if ($replacementX === $i)
+                continue;
+
+
+            $tmp = $table[$i][$newX];
+
+            for ($j = 0; $j < $this->table->getRowsTable(); $j++) {
+                array_push($tmpRow, $table[$replacementX][$j] * - ($tmp));
+            }
+
+            for ($j = 0; $j < $this->table->getRowsTable(); $j++) {
+                $table[$i][$j] += $tmpRow[$j];
+            }
+
+            $B[$i] += - ($tmp) * $B[$replacementX];
+
+            unset($tmpRow);
+        }
+
+
+        $this->table->updateTable($table, $this->basis, $B);
+
+        return true;
     }
 }
